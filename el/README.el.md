@@ -71,6 +71,7 @@ respective subdirectories.
 	- *pkgconfig*
 	- *glib2-devel*
 	- *hiredis-devel*
+	- *libcurl-devel*
 	- *openssl-devel*
 	- *pcre-devel*
 	- *xmlrpc-c-devel*
