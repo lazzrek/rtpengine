@@ -113,7 +113,7 @@ void recording_fs_init(const char *spooldir, const char *method);
  */
 void detect_setup_recording(struct call *call, const str *recordcall);
 
-void recording_start(struct call *call);
+void recording_start(struct call *call, const char *);
 void recording_stop(struct call *call);
 
 

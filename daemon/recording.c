@@ -180,7 +180,7 @@ static int pcap_create_spool_dir(const char *spoolpath) {
 }
 
 // lock must be held
-void recording_start(struct call *call) {
+void recording_start(struct call *call, const char *prefix) {
 	if (call->recording) // already active
 		return;
 
@@ -193,11 +193,16 @@ void recording_start(struct call *call) {
 	call->recording = g_slice_alloc0(sizeof(struct recording));
 	struct recording *recording = call->recording;
 	recording->escaped_callid = g_uri_escape_string(call->callid.s, NULL, 0);
-	const int rand_bytes = 8;
-	char rand_str[rand_bytes * 2 + 1];
-	rand_hex_str(rand_str, rand_bytes);
-	if (asprintf(&recording->meta_prefix, "%s-%s", recording->escaped_callid, rand_str) < 0)
-		abort();
+	if (!prefix) {
+		const int rand_bytes = 8;
+		char rand_str[rand_bytes * 2 + 1];
+		rand_hex_str(rand_str, rand_bytes);
+		if (asprintf(&recording->meta_prefix, "%s-%s", recording->escaped_callid, rand_str) < 0)
+			abort();
+	}
+	else
+		recording->meta_prefix = strdup(prefix);
+
 	_rm(init_struct, call);
 
 	// if recording has been turned on after initial call setup, we must walk
@@ -235,7 +240,7 @@ void detect_setup_recording(struct call *call, const str *recordcall) {
 		return;
 
 	if (!str_cmp(recordcall, "yes") || !str_cmp(recordcall, "on"))
-		recording_start(call);
+		recording_start(call, NULL);
 	else if (!str_cmp(recordcall, "no") || !str_cmp(recordcall, "off"))
 		recording_stop(call);
 	else

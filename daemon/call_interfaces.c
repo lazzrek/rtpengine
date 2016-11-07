@@ -738,7 +738,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 
 	detect_setup_recording(call, &flags.record_call_str);
 	if (flags.record_call)
-		recording_start(call);
+		recording_start(call, NULL);
 
 	ret = monologue_offer_answer(monologue, &streams, &flags);
 	if (!ret)
@@ -1106,7 +1106,7 @@ const char *call_start_recording_ng(bencode_item_t *input, struct callmaster *m,
 	if (!call)
 		return "Unknown call-id";
 
-	recording_start(call);
+	recording_start(call, NULL);
 
 	rwlock_unlock_w(&call->master_lock);
 	obj_put(call);
