@@ -32,7 +32,7 @@
 #include "homer.h"
 #include "recording.h"
 #include "auxlib.h"
-
+#include "filestat.h"
 
 
 struct main_context {
@@ -679,6 +679,7 @@ int main(int argc, char **argv) {
 		thread_create_detach(graphite_loop, ctx.m);
 
 	thread_create_detach(ice_thread_run, NULL);
+  thread_create_detach(filestat_loop, ctx.m);
 
 	if (num_threads < 1) {
 #ifdef _SC_NPROCESSORS_ONLN
