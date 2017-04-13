@@ -1,8 +1,8 @@
 /*
- * graphite.h
+ * filestat.h
  *
- *  Created on: Jan 19, 2015
- *      Author: fmetz
+ *  Created on: April 13, 2017
+ *      Author: lazzrek
  */
 
 #ifndef FILESTAT_H_

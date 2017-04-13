@@ -1,8 +1,8 @@
 /*
- * graphite.c
+ * filestat.c
  *
- *  Created on: Jan 19, 2015
- *      Author: fmetz
+ *  Created on: April 13, 2017
+ *      Author: lazzrek
  */
 #include <sys/types.h>
 #include <unistd.h>
