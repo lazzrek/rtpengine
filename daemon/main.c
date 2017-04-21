@@ -79,6 +79,7 @@ static int graphite_interval = 0;
 static char *spooldir;
 static char *rec_method = "pcap";
 static char *rec_format = "raw";
+static char *stat_exec_command = NULL;
 
 static void sighandler(gpointer x) {
 	sigset_t ss;
@@ -266,6 +267,7 @@ static void options(int *argc, char ***argv) {
 	char *listencli = NULL;
 	char *graphitep = NULL;
 	char *graphite_prefix_s = NULL;
+  char *stats_exec_command_s = NULL;
 	char *redisps = NULL;
 	char *redisps_write = NULL;
 	char *log_facility_s = NULL;
@@ -288,6 +290,7 @@ static void options(int *argc, char ***argv) {
 		{ "graphite", 'g', 0, G_OPTION_ARG_STRING,    &graphitep,     "Address of the graphite server",   "IP46:PORT"     },
 		{ "graphite-interval",  'G', 0, G_OPTION_ARG_INT,    &graphite_interval,  "Graphite send interval in seconds",    "INT"   },
 		{ "graphite-prefix",0,  0,	G_OPTION_ARG_STRING, &graphite_prefix_s, "Prefix for graphite line", "STRING"},
+    { "stats-exec",0,  0,	G_OPTION_ARG_STRING, &stats_exec_command_s, "Command that should be executed on statinfo", "STRING"},
 		{ "tos",	'T', 0, G_OPTION_ARG_INT,	&tos,		"Default TOS value to set on streams",	"INT"		},
 		{ "timeout",	'o', 0, G_OPTION_ARG_INT,	&timeout,	"RTP timeout",			"SECS"		},
 		{ "silent-timeout",'s',0,G_OPTION_ARG_INT,	&silent_timeout,"RTP timeout for muted",	"SECS"		},
@@ -374,6 +377,10 @@ static void options(int *argc, char ***argv) {
 
 	if (graphite_prefix_s)
 		set_prefix(graphite_prefix_s);
+
+  if(stats_exec_command_s)
+    stat_exec_command = stats_exec_command_s;
+    //filestat_set_command(stats_exec_command_s);
 
 	if (homerp) {
 		if (endpoint_parse_any_full(&homer_ep, homerp))
@@ -679,7 +686,11 @@ int main(int argc, char **argv) {
 		thread_create_detach(graphite_loop, ctx.m);
 
 	thread_create_detach(ice_thread_run, NULL);
-  thread_create_detach(filestat_loop, ctx.m);
+
+  if(stat_exec_command != NULL) {
+    stat_set_command(stat_exec_command);
+    thread_create_detach(filestat_loop, ctx.m);
+  }
 
 	if (num_threads < 1) {
 #ifdef _SC_NPROCESSORS_ONLN
