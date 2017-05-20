@@ -203,7 +203,7 @@ struct sdp_ng_flags;
 struct local_interface;
 struct call_monologue;
 struct ice_agent;
-struct homer_sender;
+struct ssrc_hash;
 
 
 typedef bencode_buffer_t call_buffer_t;
@@ -282,6 +282,8 @@ struct packet_stream {
 	struct endpoint		endpoint;	/* LOCK: out_lock */
 	struct endpoint		advertised_endpoint; /* RO */
 	struct crypto_context	crypto;		/* OUT direction, LOCK: out_lock */
+	struct ssrc_ctx		*ssrc_in,	/* LOCK: in_lock */
+				*ssrc_out;	/* LOCK: out_lock */
 
 	struct stats		stats;
 	struct stats		kernel_stats;
@@ -338,7 +340,8 @@ struct call_monologue {
 
 	str			tag;
 	str			viabranch;
-	enum tag_type    tagtype;
+	enum tag_type		tagtype;
+	str			label;
 	time_t			created;	/* RO */
 	time_t			deleted;
 	struct timeval         started; /* for CDR */
@@ -367,9 +370,10 @@ struct call {
 	GQueue			stream_fds;
 	GQueue			endpoint_maps;
 	struct dtls_cert	*dtls_cert; /* for outgoing */
+	struct ssrc_hash	*ssrc_hash;
 
 	str			callid;
-	time_t			created;
+	struct timeval		created;
 	time_t			last_signal;
 	time_t			deleted;
 	time_t			ml_deleted;
@@ -434,14 +438,10 @@ struct callmaster {
 
 	struct callmaster_config conf;
 	struct timeval          latest_graphite_interval_start;
-
-	struct homer_sender	*homer;
 };
 
 struct callmaster *callmaster_new(struct poller *);
 void callmaster_get_all_calls(struct callmaster *m, GQueue *q);
-struct timeval add_ongoing_calls_dur_in_interval(struct callmaster *m,
-		struct timeval *iv_start, struct timeval *iv_duration);
 
 //void calls_dump_redis(struct callmaster *);
 //void calls_dump_redis_read(struct callmaster *);

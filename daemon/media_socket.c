@@ -21,6 +21,7 @@
 #include "recording.h"
 #include "rtplib.h"
 #include "rtcplib.h"
+#include "ssrc.h"
 
 
 #ifndef PORT_RANDOM_MIN
@@ -33,7 +34,8 @@
 #endif
 
 
-typedef int (*rewrite_func)(str *, struct packet_stream *);
+typedef int (*rewrite_func)(str *, struct packet_stream *, struct stream_fd *, const endpoint_t *,
+		const struct timeval *, struct ssrc_ctx *);
 
 
 struct streamhandler_io {
@@ -53,13 +55,21 @@ static int __k_null(struct rtpengine_srtp *s, struct packet_stream *);
 static int __k_srtp_encrypt(struct rtpengine_srtp *s, struct packet_stream *);
 static int __k_srtp_decrypt(struct rtpengine_srtp *s, struct packet_stream *);
 
-static int call_avp2savp_rtp(str *s, struct packet_stream *);
-static int call_savp2avp_rtp(str *s, struct packet_stream *);
-static int call_avp2savp_rtcp(str *s, struct packet_stream *);
-static int call_savp2avp_rtcp(str *s, struct packet_stream *);
-static int call_avpf2avp_rtcp(str *s, struct packet_stream *);
+static int call_noop_rtcp(str *s, struct packet_stream *, struct stream_fd *, const endpoint_t *,
+		const struct timeval *, struct ssrc_ctx *);
+static int call_avp2savp_rtp(str *s, struct packet_stream *, struct stream_fd *, const endpoint_t *,
+		const struct timeval *, struct ssrc_ctx *);
+static int call_savp2avp_rtp(str *s, struct packet_stream *, struct stream_fd *, const endpoint_t *,
+		const struct timeval *, struct ssrc_ctx *);
+static int call_avp2savp_rtcp(str *s, struct packet_stream *, struct stream_fd *, const endpoint_t *,
+		const struct timeval *, struct ssrc_ctx *);
+static int call_savp2avp_rtcp(str *s, struct packet_stream *, struct stream_fd *, const endpoint_t *,
+		const struct timeval *, struct ssrc_ctx *);
+static int call_avpf2avp_rtcp(str *s, struct packet_stream *, struct stream_fd *, const endpoint_t *,
+		const struct timeval *, struct ssrc_ctx *);
 //static int call_avpf2savp_rtcp(str *s, struct packet_stream *);
-static int call_savpf2avp_rtcp(str *s, struct packet_stream *);
+static int call_savpf2avp_rtcp(str *s, struct packet_stream *, struct stream_fd *, const endpoint_t *,
+		const struct timeval *, struct ssrc_ctx *);
 //static int call_savpf2savp_rtcp(str *s, struct packet_stream *);
 
 
@@ -68,6 +78,10 @@ static int call_savpf2avp_rtcp(str *s, struct packet_stream *);
 
 static const struct streamhandler_io __shio_noop = {
 	.kernel		= __k_null,
+};
+static const struct streamhandler_io __shio_noop_rtp = {
+	.kernel		= __k_null,
+	.rtcp		= call_noop_rtcp,
 };
 static const struct streamhandler_io __shio_decrypt = {
 	.kernel		= __k_srtp_decrypt,
@@ -95,12 +109,16 @@ static const struct streamhandler __sh_noop = {
 	.in		= &__shio_noop,
 	.out		= &__shio_noop,
 };
+static const struct streamhandler __sh_noop_rtp = {
+	.in		= &__shio_noop_rtp,
+	.out		= &__shio_noop,
+};
 static const struct streamhandler __sh_savp2avp = {
 	.in		= &__shio_decrypt,
 	.out		= &__shio_noop,
 };
 static const struct streamhandler __sh_avp2savp = {
-	.in		= &__shio_noop,
+	.in		= &__shio_noop_rtp,
 	.out		= &__shio_encrypt,
 };
 static const struct streamhandler __sh_avpf2avp = {
@@ -127,8 +145,8 @@ static const struct streamhandler __sh_savpf2savp = {
 /* ********** */
 
 static const struct streamhandler * const __sh_matrix_in_rtp_avp[__PROTO_LAST] = {
-	[PROTO_RTP_AVP]			= &__sh_noop,
-	[PROTO_RTP_AVPF]		= &__sh_noop,
+	[PROTO_RTP_AVP]			= &__sh_noop_rtp,
+	[PROTO_RTP_AVPF]		= &__sh_noop_rtp,
 	[PROTO_RTP_SAVP]		= &__sh_avp2savp,
 	[PROTO_RTP_SAVPF]		= &__sh_avp2savp,
 	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_avp2savp,
@@ -137,7 +155,7 @@ static const struct streamhandler * const __sh_matrix_in_rtp_avp[__PROTO_LAST] =
 };
 static const struct streamhandler * const __sh_matrix_in_rtp_avpf[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_avpf2avp,
-	[PROTO_RTP_AVPF]		= &__sh_noop,
+	[PROTO_RTP_AVPF]		= &__sh_noop_rtp,
 	[PROTO_RTP_SAVP]		= &__sh_avpf2savp,
 	[PROTO_RTP_SAVPF]		= &__sh_avp2savp,
 	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_avpf2savp,
@@ -147,17 +165,17 @@ static const struct streamhandler * const __sh_matrix_in_rtp_avpf[__PROTO_LAST] 
 static const struct streamhandler * const __sh_matrix_in_rtp_savp[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_savp2avp,
 	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
-	[PROTO_RTP_SAVP]		= &__sh_noop,
-	[PROTO_RTP_SAVPF]		= &__sh_noop,
-	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_noop,
-	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
+	[PROTO_RTP_SAVP]		= &__sh_noop_rtp,
+	[PROTO_RTP_SAVPF]		= &__sh_noop_rtp,
+	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_noop_rtp,
+	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop_rtp,
 	[PROTO_UDPTL]			= &__sh_noop,
 };
 static const struct streamhandler * const __sh_matrix_in_rtp_savpf[__PROTO_LAST] = {
 	[PROTO_RTP_AVP]			= &__sh_savpf2avp,
 	[PROTO_RTP_AVPF]		= &__sh_savp2avp,
 	[PROTO_RTP_SAVP]		= &__sh_savpf2savp,
-	[PROTO_RTP_SAVPF]		= &__sh_noop,
+	[PROTO_RTP_SAVPF]		= &__sh_noop_rtp,
 	[PROTO_UDP_TLS_RTP_SAVP]	= &__sh_savpf2savp,
 	[PROTO_UDP_TLS_RTP_SAVPF]	= &__sh_noop,
 	[PROTO_UDPTL]			= &__sh_noop,
@@ -703,8 +721,8 @@ release_restart:
 	return 0;
 
 fail:
-	ilog(LOG_ERR, "Failed to get %u consecutive ports on interface %s for media relay",
-			num_ports, sockaddr_print_buf(&spec->local_address.addr));
+	ilog(LOG_ERR, "Failed to get %u consecutive ports on interface %s for media relay (last error: %s)",
+			num_ports, sockaddr_print_buf(&spec->local_address.addr), strerror(errno));
 	return -1;
 }
 
@@ -786,27 +804,49 @@ static int rtcp_demux(str *s, struct call_media *media) {
 	return rtcp_demux_is_rtcp(s) ? 2 : 1;
 }
 
-static int call_avpf2avp_rtcp(str *s, struct packet_stream *stream) {
-	return rtcp_avpf2avp(s);
+static int call_noop_rtcp(str *s, struct packet_stream *stream, struct stream_fd *sfd, const endpoint_t *src,
+		const struct timeval *tv, struct ssrc_ctx *ssrc_ctx)
+{
+	rtcp_parse(s, sfd, src, tv);
+	return 0;
 }
-static int call_avp2savp_rtp(str *s, struct packet_stream *stream) {
-	return rtp_avp2savp(s, &stream->crypto);
+static int call_avpf2avp_rtcp(str *s, struct packet_stream *stream, struct stream_fd *sfd, const endpoint_t *src,
+		const struct timeval *tv, struct ssrc_ctx *ssrc_ctx)
+{
+	return rtcp_avpf2avp(s, sfd, src, tv); // also does rtcp_parse
 }
-static int call_avp2savp_rtcp(str *s, struct packet_stream *stream) {
-	return rtcp_avp2savp(s, &stream->crypto);
+static int call_avp2savp_rtp(str *s, struct packet_stream *stream, struct stream_fd *sfd, const endpoint_t *src,
+		const struct timeval *tv, struct ssrc_ctx *ssrc_ctx)
+{
+	return rtp_avp2savp(s, &stream->crypto, ssrc_ctx);
 }
-static int call_savp2avp_rtp(str *s, struct packet_stream *stream) {
-	return rtp_savp2avp(s, &stream->selected_sfd->crypto);
+static int call_avp2savp_rtcp(str *s, struct packet_stream *stream, struct stream_fd *sfd, const endpoint_t *src,
+		const struct timeval *tv, struct ssrc_ctx *ssrc_ctx)
+{
+	return rtcp_avp2savp(s, &stream->crypto, ssrc_ctx);
 }
-static int call_savp2avp_rtcp(str *s, struct packet_stream *stream) {
-	return rtcp_savp2avp(s, &stream->selected_sfd->crypto);
+static int call_savp2avp_rtp(str *s, struct packet_stream *stream, struct stream_fd *sfd, const endpoint_t *src,
+		const struct timeval *tv, struct ssrc_ctx *ssrc_ctx)
+{
+	return rtp_savp2avp(s, &stream->selected_sfd->crypto, ssrc_ctx);
 }
-static int call_savpf2avp_rtcp(str *s, struct packet_stream *stream) {
-	int ret;
-	ret = rtcp_savp2avp(s, &stream->selected_sfd->crypto);
+static int call_savp2avp_rtcp(str *s, struct packet_stream *stream, struct stream_fd *sfd, const endpoint_t *src,
+		const struct timeval *tv, struct ssrc_ctx *ssrc_ctx)
+{
+	int ret = rtcp_savp2avp(s, &stream->selected_sfd->crypto, ssrc_ctx);
 	if (ret < 0)
 		return ret;
-	return rtcp_avpf2avp(s);
+	rtcp_parse(s, sfd, src, tv);
+	return ret;
+}
+static int call_savpf2avp_rtcp(str *s, struct packet_stream *stream, struct stream_fd *sfd, const endpoint_t *src,
+		const struct timeval *tv, struct ssrc_ctx *ssrc_ctx)
+{
+	int ret;
+	ret = rtcp_savp2avp(s, &stream->selected_sfd->crypto, ssrc_ctx);
+	if (ret < 0)
+		return ret;
+	return rtcp_avpf2avp(s, sfd, src, tv);
 }
 
 
@@ -814,7 +854,7 @@ static int __k_null(struct rtpengine_srtp *s, struct packet_stream *stream) {
 	*s = __res_null;
 	return 0;
 }
-static int __k_srtp_crypt(struct rtpengine_srtp *s, struct crypto_context *c) {
+static int __k_srtp_crypt(struct rtpengine_srtp *s, struct crypto_context *c, struct ssrc_ctx *ssrc_ctx) {
 	if (!c->params.crypto_suite)
 		return -1;
 
@@ -822,7 +862,7 @@ static int __k_srtp_crypt(struct rtpengine_srtp *s, struct crypto_context *c) {
 		.cipher		= c->params.crypto_suite->kernel_cipher,
 		.hmac		= c->params.crypto_suite->kernel_hmac,
 		.mki_len	= c->params.mki_len,
-		.last_index	= c->last_index,
+		.last_index	= ssrc_ctx->srtp_index,
 		.auth_tag_len	= c->params.crypto_suite->srtp_auth_tag,
 	};
 	if (c->params.mki_len)
@@ -840,10 +880,10 @@ static int __k_srtp_crypt(struct rtpengine_srtp *s, struct crypto_context *c) {
 	return 0;
 }
 static int __k_srtp_encrypt(struct rtpengine_srtp *s, struct packet_stream *stream) {
-	return __k_srtp_crypt(s, &stream->crypto);
+	return __k_srtp_crypt(s, &stream->crypto, stream->ssrc_out);
 }
 static int __k_srtp_decrypt(struct rtpengine_srtp *s, struct packet_stream *stream) {
-	return __k_srtp_crypt(s, &stream->selected_sfd->crypto);
+	return __k_srtp_crypt(s, &stream->selected_sfd->crypto, stream->ssrc_in);
 }
 
 INLINE void __re_address_translate_ep(struct re_address *o, const endpoint_t *ep) {
@@ -922,7 +962,7 @@ void kernelize(struct packet_stream *stream) {
 
 	__re_address_translate_ep(&reti.dst_addr, &sink->endpoint);
 	__re_address_translate_ep(&reti.src_addr, &sink->selected_sfd->socket.local);
-	reti.ssrc = sink->crypto.ssrc;
+	reti.ssrc = stream->ssrc_in ? htonl(stream->ssrc_in->parent->ssrc) : 0;
 
 	stream->handler->in->kernel(&reti.decrypt, stream);
 	stream->handler->out->kernel(&reti.encrypt, sink);
@@ -1055,6 +1095,38 @@ noop:
 }
 
 
+// check and update SSRC pointers
+static void __stream_ssrc(struct packet_stream *in_srtp, struct packet_stream *out_srtp, u_int32_t ssrc_bs,
+		struct ssrc_ctx **ssrc_in_p, struct ssrc_ctx **ssrc_out_p, struct ssrc_hash *ssrc_hash)
+{
+	u_int32_t ssrc = ntohl(ssrc_bs);
+
+	// input direction
+	mutex_lock(&in_srtp->in_lock);
+
+	(*ssrc_in_p) = in_srtp->ssrc_in;
+	if (G_UNLIKELY(!(*ssrc_in_p) || (*ssrc_in_p)->parent->ssrc != ssrc)) {
+		// SSRC mismatch - get the new entry
+		(*ssrc_in_p) = in_srtp->ssrc_in =
+			get_ssrc_ctx(ssrc, ssrc_hash, SSRC_DIR_INPUT);
+	}
+
+	mutex_unlock(&in_srtp->in_lock);
+
+	// out direction
+	mutex_lock(&out_srtp->out_lock);
+
+	(*ssrc_out_p) = out_srtp->ssrc_out;
+	if (G_UNLIKELY(!(*ssrc_out_p) || (*ssrc_out_p)->parent->ssrc != ssrc)) {
+		// SSRC mismatch - get the new entry
+		(*ssrc_out_p) = out_srtp->ssrc_out =
+			get_ssrc_ctx(ssrc, ssrc_hash, SSRC_DIR_OUTPUT);
+	}
+
+	mutex_unlock(&out_srtp->out_lock);
+}
+
+
 /* XXX split this function into pieces */
 /* called lock-free */
 static int stream_packet(struct stream_fd *sfd, str *s, const endpoint_t *fsin, const struct timeval *tv) {
@@ -1092,7 +1164,9 @@ static int stream_packet(struct stream_fd *sfd, str *s, const endpoint_t *fsin, 
 	rewrite_func rwf_in, rwf_out;
 	//struct local_intf *loc_addr;
 	struct rtp_header *rtp_h;
+	struct rtcp_packet *rtcp_h;
 	struct rtp_stats *rtp_s;
+	struct ssrc_ctx *ssrc_in = NULL, *ssrc_out = NULL;
 
 	call = sfd->call;
 	cm = call->callmaster;
@@ -1187,28 +1261,39 @@ loop_ok:
 		out_srtp = sink->rtcp_sibling;
 
 
-	/* stats per RTP payload type */
+	/* RTP/RTCP specifics */
 
-	if (media->protocol && media->protocol->rtp && !rtcp && !rtp_payload(&rtp_h, NULL, s)) {
-		i = (rtp_h->m_pt & 0x7f);
+	if (G_LIKELY(media->protocol && media->protocol->rtp)) {
+		if (G_LIKELY(!rtcp && !rtp_payload(&rtp_h, NULL, s))) {
+			__stream_ssrc(in_srtp, out_srtp, rtp_h->ssrc, &ssrc_in, &ssrc_out, call->ssrc_hash);
 
-		rtp_s = g_hash_table_lookup(stream->rtp_stats, &i);
-		if (!rtp_s) {
-			ilog(LOG_WARNING | LOG_FLAG_LIMIT,
-					"RTP packet with unknown payload type %u received", i);
-			atomic64_inc(&stream->stats.errors);
-			atomic64_inc(&cm->statsps.errors);
+			// check the payload type
+			i = (rtp_h->m_pt & 0x7f);
+			if (G_LIKELY(ssrc_in))
+				ssrc_in->parent->payload_type = i;
+
+			// XXX convert to array? or keep last pointer?
+			rtp_s = g_hash_table_lookup(stream->rtp_stats, &i);
+			if (!rtp_s) {
+				ilog(LOG_WARNING | LOG_FLAG_LIMIT,
+						"RTP packet with unknown payload type %u received", i);
+				atomic64_inc(&stream->stats.errors);
+				atomic64_inc(&cm->statsps.errors);
+			}
+
+			else {
+				atomic64_inc(&rtp_s->packets);
+				atomic64_add(&rtp_s->bytes, s->len);
+			}
 		}
-
-		else {
-			atomic64_inc(&rtp_s->packets);
-			atomic64_add(&rtp_s->bytes, s->len);
+		else if (rtcp && !rtcp_payload(&rtcp_h, NULL, s)) {
+			__stream_ssrc(in_srtp, out_srtp, rtcp_h->ssrc, &ssrc_in, &ssrc_out, call->ssrc_hash);
 		}
 	}
 
 	/* do we have somewhere to forward it to? */
 
-	if (!sink || !sink->selected_sfd || !out_srtp->selected_sfd || !in_srtp->selected_sfd) {
+	if (G_UNLIKELY(!sink || !sink->selected_sfd || !out_srtp->selected_sfd || !in_srtp->selected_sfd)) {
 		ilog(LOG_WARNING, "RTP packet from %s discarded", endpoint_print_buf(fsin));
 		atomic64_inc(&stream->stats.errors);
 		atomic64_inc(&cm->statsps.errors);
@@ -1222,7 +1307,7 @@ loop_ok:
 
 	determine_handler(in_srtp, sink);
 
-	if (!rtcp) {
+	if (G_LIKELY(!rtcp)) {
 		rwf_in = in_srtp->handler->in->rtp;
 		rwf_out = in_srtp->handler->out->rtp;
 	}
@@ -1236,7 +1321,7 @@ loop_ok:
 	/* return values are: 0 = forward packet, -1 = error/dont forward,
 	 * 1 = forward and push update to redis */
 	if (rwf_in) {
-		handler_ret = rwf_in(s, in_srtp);
+		handler_ret = rwf_in(s, in_srtp, sfd, fsin, tv, ssrc_in);
 	}
 
 	// If recording pcap dumper is set, then we record the call.
@@ -1244,11 +1329,9 @@ loop_ok:
 		dump_packet(call->recording, stream, s);
 	}
 
-	if (handler_ret >= 0) {
-		if (rtcp)
-			parse_and_log_rtcp_report(sfd, s, fsin, tv);
+	if (G_LIKELY(handler_ret >= 0)) {
 		if (rwf_out)
-			handler_ret += rwf_out(s, out_srtp);
+			handler_ret += rwf_out(s, out_srtp, NULL, NULL, NULL, ssrc_out);
 	}
 
 	if (handler_ret > 0) {
@@ -1463,12 +1546,9 @@ static void stream_fd_readable(int fd, void *p, uintptr_t u) {
 
 		str_init_len(&s, buf + RTP_BUFFER_HEAD_ROOM, ret);
 		ret = stream_packet(sfd, &s, &ep, &tv);
-		if (ret < 0) {
-			ilog(LOG_WARNING, "Write error on RTP socket: %s", strerror(-ret));
-			call_destroy(sfd->call);
-			goto done;
-		}
-		if (ret == 1)
+		if (G_UNLIKELY(ret < 0))
+			ilog(LOG_WARNING, "Write error on media socket: %s", strerror(-ret));
+		else if (ret == 1)
 			update = 1;
 	}
 

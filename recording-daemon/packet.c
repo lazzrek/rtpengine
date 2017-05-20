@@ -104,28 +104,39 @@ static int ssrc_tree_search(const void *testseq_p, const void *ts_p) {
 static packet_t *ssrc_next_packet(ssrc_t *ssrc) {
 	// see if we have a packet with the correct seq nr in the queue
 	packet_t *packet = g_tree_lookup(ssrc->packets, GINT_TO_POINTER(ssrc->seq));
-	if (G_LIKELY(packet != NULL))
+	if (G_LIKELY(packet != NULL)) {
+		dbg("returning in-sequence packet (seq %i)", ssrc->seq);
 		return packet;
+	}
 
 	// why not? do we have anything? (we should)
 	int nnodes = g_tree_nnodes(ssrc->packets);
-	if (G_UNLIKELY(nnodes == 0))
+	if (G_UNLIKELY(nnodes == 0)) {
+		dbg("packet queue empty");
 		return NULL;
-	if (G_LIKELY(nnodes < 10)) // XXX arbitrary value
+	}
+	if (G_LIKELY(nnodes < 10)) { // XXX arbitrary value
+		dbg("only %i packets in queue - waiting for more", nnodes);
 		return NULL; // need to wait for more
+	}
 
 	// packet was probably lost. search for the next highest seq
 	struct tree_searcher ts = { .find_seq = ssrc->seq + 1, .found_seq = -1 };
 	packet = g_tree_search(ssrc->packets, ssrc_tree_search, &ts);
-	if (packet) // bullseye
+	if (packet) {
+		// bullseye
+		dbg("lost packet - returning packet with next seq %i", packet->seq);
 		return packet;
+	}
 	if (G_UNLIKELY(ts.found_seq == -1)) {
 		// didn't find anything. seq must have wrapped around. retry
 		// starting from zero
 		ts.find_seq = 0;
 		packet = g_tree_search(ssrc->packets, ssrc_tree_search, &ts);
-		if (packet)
+		if (packet) {
+			dbg("lost packet - returning packet with next seq %i (after wrap)", packet->seq);
 			return packet;
+		}
 		if (G_UNLIKELY(ts.found_seq == -1))
 			abort();
 	}
@@ -135,6 +146,7 @@ static packet_t *ssrc_next_packet(ssrc_t *ssrc) {
 	if (G_UNLIKELY(packet == NULL))
 		abort();
 
+	dbg("lost multiple packets - returning packet with next highest seq %i", packet->seq);
 	return packet;
 }
 
@@ -230,10 +242,12 @@ void packet_process(stream_t *stream, unsigned char *buf, unsigned len) {
 		goto err;
 
 	packet->seq = ntohs(packet->rtp->seq_num);
+	unsigned long ssrc_num = ntohl(packet->rtp->ssrc);
+	log_info_ssrc = ssrc_num;
 	dbg("packet parsed successfully, seq %u", packet->seq);
 
 	// insert into ssrc queue
-	ssrc_t *ssrc = ssrc_get(stream, ntohl(packet->rtp->ssrc));
+	ssrc_t *ssrc = ssrc_get(stream, ssrc_num);
 
 	// check seq for dupes
 	if (G_UNLIKELY(ssrc->seq == -1)) {
@@ -255,15 +269,19 @@ seq_ok:
 
 	// got a new packet, run the decoder
 	ssrc_run(ssrc);
+	log_info_ssrc = 0;
 	return;
 
 dupe:
 	dbg("skipping dupe packet (new seq %i prev seq %i)", packet->seq, ssrc->seq);
 	pthread_mutex_unlock(&ssrc->lock);
+	packet_free(packet);
+	log_info_ssrc = 0;
 	return;
 
 err:
 	ilog(LOG_WARN, "Failed to parse packet headers");
 ignore:
 	packet_free(packet);
+	log_info_ssrc = 0;
 }

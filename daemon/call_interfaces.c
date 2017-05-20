@@ -5,6 +5,7 @@
 #include <glib.h>
 #include <stdlib.h>
 #include <pcre.h>
+#include <inttypes.h>
 
 #include "call_interfaces.h"
 #include "call.h"
@@ -20,6 +21,7 @@
 #include "ice.h"
 #include "recording.h"
 #include "rtplib.h"
+#include "ssrc.h"
 
 
 
@@ -427,9 +429,9 @@ static void call_status_iterator(struct call *c, struct control_stream *s) {
 //	m = c->callmaster;
 //	mutex_lock(&c->master_lock);
 
-	control_stream_printf(s, "session "STR_FORMAT" - - - - %i\n",
+	control_stream_printf(s, "session "STR_FORMAT" - - - - %lli\n",
 		STR_FMT(&c->callid),
-		(int) (poller_now - c->created));
+		timeval_diff(&g_now, &c->created) / 1000000);
 
 	/* XXX restore function */
 
@@ -654,6 +656,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 		const endpoint_t *sin)
 {
 	str sdp, fromtag, totag = STR_NULL, callid, viabranch;
+	str label = STR_NULL;
 	char *errstr;
 	GQueue parsed = G_QUEUE_INIT;
 	GQueue streams = G_QUEUE_INIT;
@@ -676,6 +679,7 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 		str_swap(&totag, &fromtag);
 	}
 	bencode_dictionary_get_str(input, "via-branch", &viabranch);
+	bencode_dictionary_get_str(input, "label", &label);
 
 	if (sdp_parse(&sdp, &parsed))
 		return "Failed to parse SDP";
@@ -735,6 +739,8 @@ static const char *call_offer_answer_ng(bencode_item_t *input, struct callmaster
 	} else {
 		monologue->tagtype = TO_TAG;
 	}
+	if (label.s && !monologue->label.s)
+		call_str_cpy(call, &monologue->label, &label);
 
 	chopper = sdp_chopper_new(&sdp);
 	bencode_buffer_destroy_add(output->buffer, (free_func_t) sdp_chopper_destroy, chopper);
@@ -917,6 +923,10 @@ static void ng_stats_stream(bencode_item_t *list, const struct packet_stream *ps
 	BF_PS("DTLS fingerprint verified", FINGERPRINT_VERIFIED);
 	BF_PS("strict source address", STRICT_SOURCE);
 	BF_PS("media handover", MEDIA_HANDOVER);
+	BF_PS("ICE", ICE);
+
+	if (ps->ssrc_in)
+		bencode_dictionary_add_integer(dict, "SSRC", ps->ssrc_in->parent->ssrc);
 
 stats:
 	if (totals->last_packet < atomic64_get(&ps->last_packet))
@@ -963,6 +973,10 @@ static void ng_stats_media(bencode_item_t *list, const struct call_media *m,
 	BF_M("SDES", SDES);
 	BF_M("passthrough", PASSTHRU);
 	BF_M("ICE", ICE);
+	BF_M("trickle ICE", TRICKLE_ICE);
+	BF_M("ICE-lite", ICE_LITE);
+	BF_M("unidirectional", UNIDIRECTIONAL);
+	BF_M("loop check", LOOP_CHECK);
 
 stats:
 	for (l = m->streams.head; l; l = l->next) {
@@ -989,6 +1003,8 @@ static void ng_stats_monologue(bencode_item_t *dict, const struct call_monologue
 	bencode_dictionary_add_str(sub, "tag", &ml->tag);
 	if (ml->viabranch.s)
 		bencode_dictionary_add_str(sub, "via-branch", &ml->viabranch);
+	if (ml->label.s)
+		bencode_dictionary_add_str(sub, "label", &ml->label);
 	bencode_dictionary_add_integer(sub, "created", ml->created);
 	if (ml->active_dialogue)
 		bencode_dictionary_add_str(sub, "in dialogue with", &ml->active_dialogue->tag);
@@ -1000,6 +1016,71 @@ stats:
 		m = l->data;
 		ng_stats_media(medias, m, totals);
 	}
+}
+
+static void ng_stats_ssrc_mos_entry_common(bencode_item_t *subent, struct ssrc_stats_block *sb,
+		unsigned int div)
+{
+	bencode_dictionary_add_integer(subent, "MOS", sb->mos / div);
+	bencode_dictionary_add_integer(subent, "round-trip time", sb->rtt / div);
+	bencode_dictionary_add_integer(subent, "jitter", sb->jitter / div);
+	bencode_dictionary_add_integer(subent, "packet loss", sb->packetloss / div);
+}
+static void ng_stats_ssrc_mos_entry(bencode_item_t *subent, struct ssrc_stats_block *sb) {
+	ng_stats_ssrc_mos_entry_common(subent, sb, 1);
+	bencode_dictionary_add_integer(subent, "reported at", sb->reported.tv_sec);
+}
+static void ng_stats_ssrc_mos_entry_dict(bencode_item_t *ent, const char *label, struct ssrc_stats_block *sb) {
+	bencode_item_t *subent = bencode_dictionary_add_dictionary(ent, label);
+	ng_stats_ssrc_mos_entry(subent, sb);
+}
+static void ng_stats_ssrc_mos_entry_dict_avg(bencode_item_t *ent, const char *label, struct ssrc_stats_block *sb,
+		unsigned int div)
+{
+	bencode_item_t *subent = bencode_dictionary_add_dictionary(ent, label);
+	ng_stats_ssrc_mos_entry_common(subent, sb, div);
+	bencode_dictionary_add_integer(subent, "samples", div);
+}
+
+static void ng_stats_ssrc(bencode_item_t *dict, struct ssrc_hash *ht) {
+	GList *ll = g_hash_table_get_values(ht->ht);
+
+	for (GList *l = ll; l; l = l->next) {
+		struct ssrc_entry *se = l->data;
+		char *tmp = bencode_buffer_alloc(dict->buffer, 12);
+		snprintf(tmp, 12, "%" PRIu32, se->ssrc);
+		bencode_item_t *ent = bencode_dictionary_add_dictionary(dict, tmp);
+
+		if (!se->stats_blocks.length || !se->lowest_mos || !se->highest_mos)
+			continue;
+
+		ng_stats_ssrc_mos_entry_dict_avg(ent, "average MOS", &se->average_mos, se->stats_blocks.length);
+		ng_stats_ssrc_mos_entry_dict(ent, "lowest MOS", se->lowest_mos);
+		ng_stats_ssrc_mos_entry_dict(ent, "highest MOS", se->highest_mos);
+
+		bencode_item_t *progdict = bencode_dictionary_add_dictionary(ent, "MOS progression");
+		// aim for about 10 entries to the list
+		GList *listent = se->stats_blocks.head;
+		struct ssrc_stats_block *sb = listent->data;
+		int interval
+			= ((struct ssrc_stats_block *) se->stats_blocks.tail->data)->reported.tv_sec
+			- sb->reported.tv_sec;
+		interval /= 10;
+		bencode_dictionary_add_integer(progdict, "interval", interval);
+		time_t next_step = sb->reported.tv_sec;
+		bencode_item_t *entlist = bencode_dictionary_add_list(progdict, "entries");
+
+		for (; listent; listent = listent->next) {
+			sb = listent->data;
+			if (sb->reported.tv_sec < next_step)
+				continue;
+			next_step += interval;
+			bencode_item_t *ent = bencode_list_add_dictionary(entlist);
+			ng_stats_ssrc_mos_entry(ent, sb);
+		}
+	}
+
+	g_list_free(ll);
 }
 
 /* call must be locked */
@@ -1021,8 +1102,10 @@ void ng_call_stats(struct call *call, const str *fromtag, const str *totag, benc
 
 	call_bencode_hold_ref(call, output);
 
-	bencode_dictionary_add_integer(output, "created", call->created);
+	bencode_dictionary_add_integer(output, "created", call->created.tv_sec);
+	bencode_dictionary_add_integer(output, "created_us", call->created.tv_usec);
 	bencode_dictionary_add_integer(output, "last signal", call->last_signal);
+	ng_stats_ssrc(bencode_dictionary_add_dictionary(output, "SSRC"), call->ssrc_hash);
 
 	tags = bencode_dictionary_add_dictionary(output, "tags");
 

@@ -7,18 +7,24 @@ use IO::Socket;
 
 my $r = NGCP::Rtpengine::Test->new();
 my ($a, $b) = $r->client_pair(
-	{sockdomain => &Socket::AF_INET},
-	{sockdomain => &Socket::AF_INET}
+	{
+		sockdomain => &Socket::AF_INET,
+		packetloss => 5,
+	},
+	{
+		sockdomain => &Socket::AF_INET,
+		packetloss => 10,
+	}
 );
 
-$r->timer_once(3, sub {
-		$b->answer($a, ICE => 'remove', label => "callee");
+$r->timer_once(1, sub {
+		$b->answer($a, ICE => 'remove');
 		$a->start_rtp();
 		$a->start_rtcp();
 	});
-$r->timer_once(10, sub { $r->stop(); });
+$r->timer_once(60, sub { $r->stop(); });
 
-$a->offer($b, ICE => 'remove', label => "caller");
+$a->offer($b, ICE => 'remove');
 $b->start_rtp();
 $b->start_rtcp();
 
