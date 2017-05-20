@@ -32,7 +32,7 @@
 #include "homer.h"
 #include "recording.h"
 #include "auxlib.h"
-#include "filestat.h"
+#include "execstat.h"
 #include "rtcp.h"
 
 struct main_context {
@@ -80,6 +80,7 @@ static char *spooldir;
 static char *rec_method = "pcap";
 static char *rec_format = "raw";
 static char *stat_exec_command = NULL;
+static int stat_exec_interval = 10;
 
 static void sighandler(gpointer x) {
 	sigset_t ss;
@@ -246,6 +247,7 @@ static void options(int *argc, char ***argv) {
 	char *graphitep = NULL;
 	char *graphite_prefix_s = NULL;
   char *stats_exec_command_s = NULL;
+  int stats_exec_interval_i = 0;
 	char *redisps = NULL;
 	char *redisps_write = NULL;
 	char *log_facility_cdr_s = NULL;
@@ -268,6 +270,7 @@ static void options(int *argc, char ***argv) {
 		{ "graphite-interval",  'G', 0, G_OPTION_ARG_INT,    &graphite_interval,  "Graphite send interval in seconds",    "INT"   },
 		{ "graphite-prefix",0,  0,	G_OPTION_ARG_STRING, &graphite_prefix_s, "Prefix for graphite line", "STRING"},
     { "stats-exec",0,  0,	G_OPTION_ARG_STRING, &stats_exec_command_s, "Command that should be executed on statinfo", "STRING"},
+    { "stats-interval",0,  0,	G_OPTION_ARG_INT, &stats_exec_interval_i, "Interval of stat execution", "INT"},
 		{ "tos",	'T', 0, G_OPTION_ARG_INT,	&tos,		"Default TOS value to set on streams",	"INT"		},
 		{ "timeout",	'o', 0, G_OPTION_ARG_INT,	&timeout,	"RTP timeout",			"SECS"		},
 		{ "silent-timeout",'s',0,G_OPTION_ARG_INT,	&silent_timeout,"RTP timeout for muted",	"SECS"		},
@@ -355,7 +358,9 @@ static void options(int *argc, char ***argv) {
 
   if(stats_exec_command_s)
     stat_exec_command = stats_exec_command_s;
-    //filestat_set_command(stats_exec_command_s);
+
+  if(stats_exec_interval_i)
+    stat_exec_interval = stats_exec_interval_i;
 
 	if (homerp) {
 		if (endpoint_parse_any_full(&homer_ep, homerp))
@@ -651,8 +656,8 @@ int main(int argc, char **argv) {
 	thread_create_detach(ice_thread_run, NULL);
 
   if(stat_exec_command != NULL) {
-    stat_set_command(stat_exec_command);
-    thread_create_detach(filestat_loop, ctx.m);
+    execstat_init(stat_exec_command, stat_exec_interval);
+    thread_create_detach(execstat_loop, ctx.m);
   }
 
 	if (num_threads < 1) {

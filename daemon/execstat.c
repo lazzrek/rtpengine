@@ -1,5 +1,5 @@
 /*
- * filestat.c
+ * execstat.c
  *
  *  Created on: April 13, 2017
  *      Author: lazzrek
@@ -14,18 +14,20 @@
 
 #include "log.h"
 #include "call.h"
-#include "filestat.h"
+#include "execstat.h"
 
-static char* stat_command = NULL;
+static char* execstat_command = NULL;
+static int execstat_interval;
 
-void stat_set_command(char* command) {
-	stat_command = command;
+void execstat_init(char* command, int interval) {
+	execstat_command = command;
+  execstat_interval = interval;
 }
 
 void write_stat_data(struct callmaster *cm) {
-  struct timeval avg, calls_dur_iv;
-	u_int64_t num_sessions, min_sess_iv, max_sess_iv;
-	struct request_time offer_iv, answer_iv, delete_iv;
+  struct timeval avg; //calls_dur_iv;
+	u_int64_t num_sessions; //, min_sess_iv, max_sess_iv;
+	//struct request_time offer_iv, answer_iv, delete_iv;
 
   // sanity checks
   if (!cm) {
@@ -38,17 +40,7 @@ void write_stat_data(struct callmaster *cm) {
 	num_sessions = cm->totalstats.total_managed_sess;
 	mutex_unlock(&cm->totalstats.total_average_lock);
 
-  /*char* stats_filepath = "/tmp/rtpengine.stats";
-  chmod(stats_filepath, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-
-  FILE *mfp = fopen(stats_filepath, "w");
-  if (mfp == NULL) {
-		ilog(LOG_ERROR, "Could not open stat file: %s", stats_filepath);
-		//free(stats_filepath);
-		return;
-	}*/
-
-  FILE* ffd = popen(stat_command, "w");
+  FILE* ffd = popen(execstat_command, "w");
   if(!ffd) {
     fprintf(stderr, "fail\n");
     return;
@@ -71,10 +63,9 @@ void write_stat_data(struct callmaster *cm) {
   pclose(ffd);
 }
 
-void filestat_loop(void *d) {
+void execstat_loop(void *d) {
 	struct callmaster *cm = d;
   int passed = 0;
-  int interval = 10;
 
     // sanity checks
   if (!cm) {
@@ -85,7 +76,7 @@ void filestat_loop(void *d) {
 	while (!g_shutdown) {
     sleep(1);
     passed += 1;
-    if(passed >= interval) {
+    if(passed >= execstat_interval) {
       write_stat_data(cm);
       passed = 0;
     }
