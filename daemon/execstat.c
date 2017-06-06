@@ -71,9 +71,9 @@ void write_stat_data(struct callmaster *cm) {
   fprintf(ffd, "total_relayed_errors "UINT64F"\n", atomic64_get(&cm->totalstats.total_relayed_errors));
   fprintf(ffd, "total_nopacket_relayed_sess "UINT64F"\n", atomic64_get(&cm->totalstats.total_nopacket_relayed_sess));
   fprintf(ffd, "total_oneway_stream_sess "UINT64F"\n", atomic64_get(&cm->totalstats.total_oneway_stream_sess));
-  fprintf(ffd, "foreign_sessions "UINT64F"\n", cm->totalstats.foreign_sessions);
-  fprintf(ffd, "own_sessions "UINT64F"\n", cm->totalstats.own_sessions);
-  fprintf(ffd, "total_sessions "UINT64F"\n", cm->totalstats.total_sessions);
+  fprintf(ffd, "foreign_sessions "UINT64F"\n", ts.foreign_sessions);
+  fprintf(ffd, "own_sessions "UINT64F"\n", ts.own_sessions);
+  fprintf(ffd, "total_sessions "UINT64F"\n", ts.total_sessions);
 
   fprintf(ffd, "average_call_dur %ld.%06ld\n", avg.tv_sec, avg.tv_usec);
 
