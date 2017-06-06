@@ -26,6 +26,7 @@ void execstat_init(char* command, int interval) {
 
 void write_stat_data(struct callmaster *cm) {
   struct timeval avg; //calls_dur_iv;
+  struct totalstats ts;
 	u_int64_t num_sessions; //, min_sess_iv, max_sess_iv;
 	//struct request_time offer_iv, answer_iv, delete_iv;
 
@@ -45,6 +46,18 @@ void write_stat_data(struct callmaster *cm) {
     fprintf(stderr, "fail\n");
     return;
   }
+
+  rwlock_lock_r(&cm->hashlock);
+	mutex_lock(&cm->totalstats_interval.managed_sess_lock);
+	ts.managed_sess_max = cm->totalstats_interval.managed_sess_max;
+	ts.managed_sess_min = cm->totalstats_interval.managed_sess_min;
+  ts.total_sessions = g_hash_table_size(cm->callhash);
+  ts.foreign_sessions = atomic64_get(&cm->stats.foreign_sessions);
+	ts.own_sessions = ts.total_sessions - ts.foreign_sessions;
+	cm->totalstats_interval.managed_sess_max = ts.own_sessions;;
+	cm->totalstats_interval.managed_sess_min = ts.own_sessions;
+	mutex_unlock(&cm->totalstats_interval.managed_sess_lock);
+	rwlock_unlock_r(&cm->hashlock);
 
   fprintf(ffd, "uptime %llu\n", (unsigned long long)time(NULL)-cm->totalstats.started);
   fprintf(ffd, "total_managed_sess "UINT64F"\n", num_sessions);
